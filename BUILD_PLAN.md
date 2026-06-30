@@ -139,10 +139,16 @@ The flow per inbound message: load history from `messages`, call Claude with bot
 ### Exotel
 - Missed calls arrive via a **Passthru applet** webhook.
 - **[BLOCKER] The Passthru webhook URL must point to the LIVE Vercel deployment**, not localhost or a preview URL. Confirm this before any clinic test.
+- Live deployment as of 2026-06-29: **https://call-recovery-system.vercel.app** (Vercel project `call-recovery-system`, linked to this GitHub repo's `main` branch). `EXOTEL_WEBHOOK_URL` still needs updating from its placeholder to `https://call-recovery-system.vercel.app/api/webhooks/exotel` once Exotel is set up.
 
 ### Meta WhatsApp Cloud API
 - Business verified via the **UDYAM** certificate → **production sending is unlocked**.
 - Template is **approved as Utility** (chosen over Marketing to minimize cost).
+- **Live as of 2026-06-29.** Real production phone number is `+91 99400 59009` (`META_PHONE_NUMBER_ID=1229528263568640`, WABA name "Medixum AI", WABA ID `1367537938664056`) — verified production-grade, *not* Meta's sandbox Test Number (that was an earlier misconfiguration, now fixed).
+- **[GOTCHA — cost real debugging time] Two separate subscriptions are required for inbound webhooks to actually arrive, not one:**
+  1. App-level webhook config (`POST /{app-id}/subscriptions` with `callback_url` + `verify_token` + `fields`) — this is what most setup guides cover.
+  2. **The WABA itself must separately be subscribed to that app** (`POST /{waba-id}/subscribed_apps`). Skipping this means the app-level webhook can be fully configured and "active": true, GET verification challenges pass fine, and yet **inbound messages never arrive** — there's no error, they just silently never get delivered. This is exactly what happened here: step 1 was done, step 2 wasn't, and a real test message produced no reply with no visible error anywhere. Confirmed via `GET /{waba-id}/subscribed_apps` returning an empty array; fixed by POSTing to that same endpoint.
+- Webhook callback URL is now `https://call-recovery-system.vercel.app/api/webhooks/whatsapp` (previously pointed at a dead ngrok tunnel from an earlier session — also a dead end, separate from the gotcha above).
 - **[BLOCKER] Template name mismatch between code and docs.** `lib/whatsapp.ts#sendMissedCallTemplate` sends template name `missedcall_recovery` (no underscore between "missed" and "call"), but `docs/phase2-setup-guide.md` and the rest of this plan call it `missed_call_recovery`. Confirm which name was actually approved in WhatsApp Manager — if it's `missed_call_recovery`, the live send will fail with a "template not found" error. The follow-up template name (`missed_call_followup`) matches between code and docs.
 - Watch the template **language code** — both templates send hardcoded `language: { code: "en" }` in `lib/whatsapp.ts`, even though Tamil-language bodies are drafted in `docs/phase2-setup-guide.md`. There's no Tamil send path in code yet; a past bug was a language-code mismatch on send.
 
@@ -236,15 +242,17 @@ Done:
 - ✅ Clinic identification by DID (Exotel) and by `whatsapp_phone_number_id` (cold WhatsApp messages)
 - ✅ `npm run build` passes clean (typecheck + Next.js production build)
 - ✅ Migration `002_auth_patients_messages_appointments.sql` applied to the real Supabase project; demo clinic's `whatsapp_phone_number_id` set
-- ✅ **End-to-end WhatsApp chatbot test passed (2026-06-29)**: real inbound message → Claude (via AICredits stopgap, see §8) → `book_appointment` tool called correctly → real `appointments` row written → real reply sent back over WhatsApp
+- ✅ Deployed live to Vercel: **https://call-recovery-system.vercel.app** (2026-06-29)
+- ✅ Real production WhatsApp number confirmed and wired up (`+91 99400 59009`, WABA "Medixum AI") — replaced the earlier Test Number misconfiguration
+- ✅ **Full live end-to-end WhatsApp chatbot test passed (2026-06-29)**: real inbound message via Meta webhook (no simulation) → Claude (via AICredits stopgap, see §8) → `book_appointment` tool called correctly → real `appointments` row written → real reply sent back over WhatsApp
+- ✅ Meta webhook fully wired: app-level subscription + WABA-level `subscribed_apps` (see the gotcha noted in §8) + callback URL pointed at the live Vercel deployment
 
 Blockers before first clinic test:
-- [ ] Confirm **Exotel Passthru webhook URL → live Vercel deployment** (`.env.example` points it at `https://medixumcge.vercel.app/api/webhooks/exotel` — confirm this is actually what's configured in the Exotel Passthru applet right now)
+- [ ] Confirm **Exotel Passthru webhook URL → live Vercel deployment** — needs to be updated from its current placeholder to `https://call-recovery-system.vercel.app/api/webhooks/exotel` once Exotel is set up
 - [ ] Obtain a **direct Anthropic API key** and move off the AICredits stopgap (resolve international card; see §8 for what reverting involves — it's a real code change, not just an env swap)
-- [ ] **Resolve the WhatsApp template name mismatch** — code sends `missedcall_recovery`, docs/plan say `missed_call_recovery` (see §8). Whichever one isn't the real approved name will fail in production.
+- [ ] **Resolve the WhatsApp template name mismatch** — code sends `missedcall_recovery`, docs/plan say `missed_call_recovery` (see §8). Whichever one isn't the real approved name will fail in production. (This only affects the Exotel-triggered first-touch template send, not the chatbot reply flow already tested live.)
 - [ ] Decide on Supabase Auth email-confirmation setting for fast onboarding (see note in §9)
 - [ ] Not yet built: WhatsApp interactive buttons (explicitly deferred — see §9a)
-- [ ] The phone_number_id currently configured (`1190993544090868`) resolves to a Meta **"Test Number"**, not a verified production WhatsApp number, despite §8 stating UDYAM verification unlocked production sending — confirm which number is actually meant to go live, and that test-number recipient restrictions (only pre-verified numbers can receive messages) aren't silently limiting the real clinic rollout
 
 **Target:** first paying clinic by **end of July**; recurring revenue from **August**.
 
