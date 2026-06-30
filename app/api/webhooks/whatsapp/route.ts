@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { supabase } from "@/lib/supabase";
 import { handlePatientMessage } from "@/lib/chatbot";
@@ -45,20 +45,30 @@ export async function POST(req: NextRequest) {
 
   // Meta routes delivery receipts + status updates through the same endpoint
   const changes = body?.entry?.[0]?.changes?.[0]?.value;
-  if (!changes?.messages?.length) {
-    return NextResponse.json({ status: "ok" });
+  const message = changes?.messages?.[0];
+
+  // Only handle text for now — ignore images, audio, delivery receipts, etc.
+  if (message?.type === "text") {
+    const patientPhone = `+${message.from}`;
+    const incomingText: string = message.text?.body ?? "";
+    const phoneNumberId = changes.metadata?.phone_number_id as string | undefined;
+
+    // Ack Meta immediately and do the actual work afterward. Meta retries the
+    // webhook delivery if it doesn't get a fast response, and since a single
+    // chatbot turn (LLM round-trip + tool-use + DB writes) can take several
+    // seconds, awaiting it here before responding caused Meta to retry and the
+    // same inbound message to get processed (and replied to) twice.
+    after(() => processInboundMessage(patientPhone, incomingText, phoneNumberId));
   }
 
-  const message = changes.messages[0];
+  return NextResponse.json({ status: "ok" });
+}
 
-  // Only handle text for now — ignore images, audio, etc.
-  if (message.type !== "text") {
-    return NextResponse.json({ status: "ok" });
-  }
-
-  const patientPhone = `+${message.from}`;
-  const incomingText: string = message.text?.body ?? "";
-
+async function processInboundMessage(
+  patientPhone: string,
+  incomingText: string,
+  phoneNumberId: string | undefined
+) {
   // Look up the most recent active session for this patient
   const { data: session } = await supabase
     .from("whatsapp_sessions")
@@ -72,7 +82,6 @@ export async function POST(req: NextRequest) {
   // No prior session — patient messaged us cold (unusual but possible)
   if (!session) {
     // Identify the clinic from the Meta business phone number that received this message
-    const phoneNumberId = changes.metadata?.phone_number_id as string | undefined;
     const { data: clinic } = phoneNumberId
       ? await supabase
           .from("clinics")
@@ -112,7 +121,7 @@ export async function POST(req: NextRequest) {
       const { error: sendError } = await sendTextMessage(patientPhone, reply);
       if (sendError) console.error("[whatsapp-webhook] send failed", sendError);
     }
-    return NextResponse.json({ status: "ok" });
+    return;
   }
 
   // Already escalated — don't let the bot respond again
@@ -122,7 +131,7 @@ export async function POST(req: NextRequest) {
       "Your request has been escalated. Our staff will contact you shortly."
     );
     if (sendError) console.error("[whatsapp-webhook] send failed", sendError);
-    return NextResponse.json({ status: "ok" });
+    return;
   }
 
   // Normal chatbot flow
@@ -141,6 +150,4 @@ export async function POST(req: NextRequest) {
     console.log(`[whatsapp-webhook] escalation triggered for ${patientPhone}`);
     // TODO Phase 2: push notification to clinic dashboard
   }
-
-  return NextResponse.json({ status: "ok" });
 }
