@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   // Look up the most recent active session for this patient
   const { data: session } = await supabase
     .from("whatsapp_sessions")
-    .select("id, status, clinic_id")
+    .select("id, status, clinic_id, missed_call_id")
     .eq("patient_phone", patientPhone)
     .in("status", ["active", "escalated"])
     .order("created_at", { ascending: false })
@@ -106,7 +106,8 @@ export async function POST(req: NextRequest) {
         patientPhone,
         incomingText,
         newSession.id,
-        clinic?.id
+        clinic?.id,
+        false // cold session — patient messaged in on their own, no missed call
       );
       const { error: sendError } = await sendTextMessage(patientPhone, reply);
       if (sendError) console.error("[whatsapp-webhook] send failed", sendError);
@@ -129,7 +130,8 @@ export async function POST(req: NextRequest) {
     patientPhone,
     incomingText,
     session.id,
-    session.clinic_id ?? undefined
+    session.clinic_id ?? undefined,
+    !!session.missed_call_id
   );
 
   const { error: sendError } = await sendTextMessage(patientPhone, reply);
