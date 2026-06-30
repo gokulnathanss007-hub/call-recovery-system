@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   // Look up the most recent active session for this patient
   const { data: session } = await supabase
     .from("whatsapp_sessions")
-    .select("id, status")
+    .select("id, status, clinic_id")
     .eq("patient_phone", patientPhone)
     .in("status", ["active", "escalated"])
     .order("created_at", { ascending: false })
@@ -71,34 +71,56 @@ export async function POST(req: NextRequest) {
 
   // No prior session — patient messaged us cold (unusual but possible)
   if (!session) {
+    // Identify the clinic from the Meta business phone number that received this message
+    const phoneNumberId = changes.metadata?.phone_number_id as string | undefined;
+    const { data: clinic } = phoneNumberId
+      ? await supabase
+          .from("clinics")
+          .select("id")
+          .eq("whatsapp_phone_number_id", phoneNumberId)
+          .maybeSingle()
+      : { data: null };
+
     const { data: newSession } = await supabase
       .from("whatsapp_sessions")
       .insert({
+        clinic_id: clinic?.id ?? null,
         patient_phone: patientPhone,
         status: "active",
         last_message_at: new Date().toISOString(),
-        context: [],
       })
       .select("id")
       .single();
+
+    if (clinic) {
+      await supabase
+        .from("patients")
+        .upsert(
+          { clinic_id: clinic.id, phone: patientPhone, last_contact_at: new Date().toISOString() },
+          { onConflict: "clinic_id,phone" }
+        );
+    }
 
     if (newSession) {
       const { reply } = await handlePatientMessage(
         patientPhone,
         incomingText,
-        newSession.id
+        newSession.id,
+        clinic?.id
       );
-      await sendTextMessage(patientPhone, reply);
+      const { error: sendError } = await sendTextMessage(patientPhone, reply);
+      if (sendError) console.error("[whatsapp-webhook] send failed", sendError);
     }
     return NextResponse.json({ status: "ok" });
   }
 
   // Already escalated — don't let the bot respond again
   if (session.status === "escalated") {
-    await sendTextMessage(
+    const { error: sendError } = await sendTextMessage(
       patientPhone,
       "Your request has been escalated. Our staff will contact you shortly."
     );
+    if (sendError) console.error("[whatsapp-webhook] send failed", sendError);
     return NextResponse.json({ status: "ok" });
   }
 
@@ -106,10 +128,12 @@ export async function POST(req: NextRequest) {
   const { reply, escalate } = await handlePatientMessage(
     patientPhone,
     incomingText,
-    session.id
+    session.id,
+    session.clinic_id ?? undefined
   );
 
-  await sendTextMessage(patientPhone, reply);
+  const { error: sendError } = await sendTextMessage(patientPhone, reply);
+  if (sendError) console.error("[whatsapp-webhook] send failed", sendError);
 
   if (escalate) {
     console.log(`[whatsapp-webhook] escalation triggered for ${patientPhone}`);

@@ -33,3 +33,6 @@ next-env.d.ts
 
 # Trigger.dev local dev cache
 .trigger/
+
+# Claude Code local tooling state
+.claude/

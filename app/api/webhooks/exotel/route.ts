@@ -95,9 +95,22 @@ export async function POST(req: NextRequest) {
     ? new Date(payload.StartTime).toISOString()
     : new Date().toISOString();
 
+  // Identify which clinic owns this DID. Unmatched DIDs still get logged
+  // (clinic_id stays null) rather than dropping the call.
+  const { data: clinic } = await supabase
+    .from("clinics")
+    .select("id")
+    .eq("did", did)
+    .maybeSingle();
+
+  if (!clinic) {
+    console.warn(`[exotel-webhook] no clinic found for DID ${did}`);
+  }
+
   const { data: inserted, error: dbError } = await supabase
     .from("missed_calls")
     .insert({
+      clinic_id: clinic?.id ?? null,
       patient_phone: callerNumber,
       exotel_did: did,
       call_status: callStatus,
@@ -114,8 +127,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: "ok" });
   }
 
+  if (clinic) {
+    await supabase
+      .from("patients")
+      .upsert(
+        { clinic_id: clinic.id, phone: callerNumber, last_contact_at: new Date().toISOString() },
+        { onConflict: "clinic_id,phone" }
+      );
+  }
+
   await missedCallRecovery.trigger({
     missedCallId: inserted.id,
+    clinicId: clinic?.id,
     patientPhone: callerNumber,
     exotelDid: did,
     callTimestamp: callTimestamp,

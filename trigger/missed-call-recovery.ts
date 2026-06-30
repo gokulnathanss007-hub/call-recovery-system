@@ -4,6 +4,7 @@ import { sendMissedCallTemplate, sendFollowUpTemplate } from "@/lib/whatsapp";
 
 export interface MissedCallPayload {
   missedCallId: string;
+  clinicId?: string;
   patientPhone: string;
   exotelDid: string;
   callTimestamp: string;
@@ -12,7 +13,7 @@ export interface MissedCallPayload {
 export const missedCallRecovery = task({
   id: "missed-call-recovery",
   run: async (payload: MissedCallPayload, { ctx }) => {
-    const { missedCallId, patientPhone, exotelDid } = payload;
+    const { missedCallId, clinicId, patientPhone, exotelDid } = payload;
 
     logger.info("Starting missed call recovery", { missedCallId, patientPhone });
 
@@ -44,6 +45,7 @@ export const missedCallRecovery = task({
 
       // Create the WhatsApp session record
       await supabase.from("whatsapp_sessions").insert({
+        clinic_id: clinicId ?? null,
         patient_phone: patientPhone,
         missed_call_id: missedCallId,
         session_id: messageId,
